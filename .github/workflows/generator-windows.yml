@@ -608,7 +608,7 @@ jobs:
         if: env.UPLOAD_ARTIFACT == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: smartia-final-${{ env.filename }}-${{ matrix.job.arch || 'x86' }}
+          name: smartia-final-${{ env.filename }}-windows-x64
           path: |
             ./SignOutput/${{ env.filename }}.exe
             ./SignOutput/${{ env.filename }}.msi
