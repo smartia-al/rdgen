@@ -664,8 +664,17 @@ jobs:
             exit 1
           fi
 
+      - name: Upload Smartia final installer artifact
+        if: env.UPLOAD_ARTIFACT == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: smartia-final-${{ env.filename }}-macos-${{ matrix.job.arch }}
+          path: ${{ github.workspace }}/${{ env.filename }}-${{ matrix.job.arch }}.dmg
+          if-no-files-found: error
+
       - name: send file to rdgen server
         if: ${{ env.rdgen == 'true' }}
+        continue-on-error: true
         shell: bash
         run: |
           curl -i -X POST \
@@ -673,11 +682,12 @@ jobs:
             -H "Authorization: Bearer ${{ env.token }}" \
             -F "file=@$GITHUB_WORKSPACE/${{ env.filename }}-${{ matrix.job.arch }}.dmg" \
             -F "uuid=${{ env.uuid }}" \
-            "${{ secrets.GENURL }}/save_custom_client"
+            "https://rdgen.smartia.al/save_custom_client"
         
 
       - name: send file to api server
         if: ${{ env.rdgen == 'false' }}
+        continue-on-error: true
         shell: bash
         run: |
           curl -i -X POST \
