@@ -559,63 +559,36 @@ jobs:
             -O "$ASSETS_DIR/logo.png" \
             "${{ env.logolink_url }}/get_png?filename=${{ env.logolink_file }}&uuid=${{ env.logolink_uuid }}"
 
-      - name: Sign macOS app bundle
-        if: env.MACOS_P12_BASE64 != ''
+      - name: Sign and verify macOS app bundle
+        shell: bash
         run: |
-            cd flutter/build/macos/Build/Products/Release
-            # Debug info
-            echo "Current directory contents:"
-            ls -la
-            
-            # Rename RustDesk.app to the custom app name first
-            if [ -d "RustDesk.app" ]; then
-              # First rename the app if it's still called RustDesk.app
-              mv "RustDesk.app" "${{ env.appname }}.app"
-              echo "Renamed RustDesk.app to ${{ env.appname }}.app"
-            fi
-            
-            echo "App bundle contents after rename:"
-            ls -la "${{ env.appname }}.app" || echo "App not found"
-            ls -la "${{ env.appname }}.app/Contents" || echo "Contents not found"
-            
-            # Decode the certificate
+          set -euo pipefail
+          cd flutter/build/macos/Build/Products/Release
+          if [ -d "RustDesk.app" ] && [ ! -d "${{ env.appname }}.app" ]; then
+            mv "RustDesk.app" "${{ env.appname }}.app"
+          fi
+          APP_BUNDLE="${{ env.appname }}.app"
+          [ -d "$APP_BUNDLE/Contents/MacOS" ] || { echo "Invalid macOS app bundle: $APP_BUNDLE"; exit 1; }
+
+          if [ -n "${{ secrets.MACOS_P12_BASE64 }}" ]; then
+            echo "Developer signing secret detected; rcodesign will sign the complete bundle."
             echo "${{ secrets.MACOS_P12_BASE64 }}" | base64 --decode > certificate.p12
-            
-            # Sign the app bundle and its contents
-            if [ -d "${{ env.appname }}.app/Contents/MacOS" ]; then
-              echo "Signing main executable..."
-              MAIN_EXECUTABLE="${{ env.appname }}.app/Contents/MacOS/${{ env.appname }}"
-              if [ -f "$MAIN_EXECUTABLE" ]; then
-                rcodesign sign --p12-file certificate.p12 --p12-password "${{ secrets.MACOS_P12_PASSWORD }}" \
-                  --code-signature-flags runtime "$MAIN_EXECUTABLE"
-              else
-                echo "Main executable not found at expected path: $MAIN_EXECUTABLE"
-                # Try to find the actual executable
-                echo "Available executables in MacOS directory:"
-                ls -la "${{ env.appname }}.app/Contents/MacOS/"
-                ACTUAL_EXECUTABLE=$(ls "${{ env.appname }}.app/Contents/MacOS/" | head -n 1)
-                if [ -n "$ACTUAL_EXECUTABLE" ]; then
-                  echo "Found executable: $ACTUAL_EXECUTABLE"
-                  rcodesign sign --p12-file certificate.p12 --p12-password "${{ secrets.MACOS_P12_PASSWORD }}" \
-                    --code-signature-flags runtime "${{ env.appname }}.app/Contents/MacOS/$ACTUAL_EXECUTABLE"
-                fi
-              fi
-              
-              echo "Signing frameworks..."
-              find "${{ env.appname }}.app/Contents/Frameworks" -type f -not -name ".*" -exec \
-                rcodesign sign --p12-file certificate.p12 --p12-password "${{ secrets.MACOS_P12_PASSWORD }}" \
-                --code-signature-flags runtime {} \;
-              
-              echo "Signing main bundle..."
-              rcodesign sign --p12-file certificate.p12 --p12-password "${{ secrets.MACOS_P12_PASSWORD }}" \
-                --code-signature-flags runtime "${{ env.appname }}.app"
-            else
-              echo "Error: Invalid app bundle structure"
-              exit 1
-            fi
-            
-            # Clean up
-            rm certificate.p12 
+            rcodesign sign --p12-file certificate.p12 --p12-password "${{ secrets.MACOS_P12_PASSWORD }}" \
+              --code-signature-flags runtime "$APP_BUNDLE"
+            rm -f certificate.p12
+            SIGNING_MODE="developer-id"
+          else
+            echo "No Developer ID secret; applying one consistent ad-hoc signature to the complete bundle."
+            # --deep signs nested Flutter frameworks, dylibs and the service with
+            # the same Team ID, preventing dyld Team ID mismatch at launch.
+            codesign --force --deep --sign - --timestamp=none --options runtime "$APP_BUNDLE"
+            SIGNING_MODE="adhoc"
+          fi
+
+          codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
+          codesign -dv --verbose=4 "$APP_BUNDLE" 2>&1 | tee signing.txt
+          grep -q "Signature=" signing.txt
+          echo "macOS signing verified: $SIGNING_MODE"
 
       - name: Create DMG
         run: |
