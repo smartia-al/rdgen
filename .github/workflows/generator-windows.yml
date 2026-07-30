@@ -605,14 +605,26 @@ jobs:
         if: env.UPLOAD_ARTIFACT == 'true'
         shell: pwsh
         run: |
-          $installer = "./SignOutput/${{ env.filename }}.exe"
+          $installer = (Resolve-Path "./SignOutput/${{ env.filename }}.exe").Path
           if (-not (Test-Path $installer)) { throw "Final Windows installer is missing." }
-          & $installer --silent-install
-          if ($LASTEXITCODE -ne 0) { throw "Silent install failed with exit code $LASTEXITCODE." }
-          Start-Sleep -Seconds 10
-          $service = Get-Service -Name RustDesk -ErrorAction Stop
-          if ($service.Status -ne 'Running') { Start-Service -Name RustDesk; Start-Sleep -Seconds 5 }
-          $service = Get-Service -Name RustDesk -ErrorAction Stop
+          # The self-extracting installer starts its worker separately, so it does
+          # not reliably set $LASTEXITCODE. The Windows Service is the real proof.
+          Start-Process -FilePath $installer -ArgumentList '--silent-install' | Out-Null
+          $deadline = (Get-Date).AddSeconds(75)
+          $service = $null
+          while ((Get-Date) -lt $deadline) {
+            $service = Get-Service -Name RustDesk -ErrorAction SilentlyContinue
+            if ($service) {
+              if ($service.Status -ne 'Running') {
+                Start-Service -Name RustDesk -ErrorAction SilentlyContinue
+              }
+              $service.Refresh()
+              if ($service.Status -eq 'Running') { break }
+            }
+            Start-Sleep -Seconds 3
+          }
+          if (-not $service) { throw "RustDesk Windows Service was not created by the installer." }
+          $service.Refresh()
           if ($service.Status -ne 'Running') { throw "RustDesk Windows Service is not running." }
           $path = (Get-CimInstance Win32_Service -Filter "Name='RustDesk'").PathName
           if ($path -notmatch '(?i)rustdesk\.exe') { throw "RustDesk service does not use the canonical executable." }
