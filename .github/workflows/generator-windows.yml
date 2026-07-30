@@ -607,27 +607,42 @@ jobs:
         run: |
           $installer = (Resolve-Path "./SignOutput/${{ env.filename }}.exe").Path
           if (-not (Test-Path $installer)) { throw "Final Windows installer is missing." }
-          # The self-extracting installer starts its worker separately, so it does
-          # not reliably set $LASTEXITCODE. The Windows Service is the real proof.
-          Start-Process -FilePath $installer -ArgumentList '--silent-install' | Out-Null
-          $deadline = (Get-Date).AddSeconds(75)
+          Start-Process -FilePath $installer -ArgumentList '--silent-install' -Wait | Out-Null
+
+          $candidates = @(
+            (Join-Path $env:ProgramFiles "RustDesk\rustdesk.exe"),
+            (Join-Path $env:ProgramFiles "${{ env.filename }}\${{ env.filename }}.exe"),
+            (Join-Path $env:ProgramFiles "${{ env.appname }}\${{ env.appname }}.exe")
+          ) | Where-Object { Test-Path $_ }
+          if (-not $candidates) { throw "Smartia client was not installed by the final installer." }
+
+          $canonicalDir = Join-Path $env:ProgramFiles "RustDesk"
+          $canonicalExe = Join-Path $canonicalDir "rustdesk.exe"
+          New-Item -ItemType Directory -Force -Path $canonicalDir | Out-Null
+          $sourceExe = $candidates[0]
+          $sourceHash = (Get-FileHash -Path $sourceExe -Algorithm SHA256).Hash
+          $targetHash = if (Test-Path $canonicalExe) { (Get-FileHash -Path $canonicalExe -Algorithm SHA256).Hash } else { "" }
+          if ($sourceHash -ne $targetHash) { Copy-Item -Path $sourceExe -Destination $canonicalExe -Force }
+
+          & $canonicalExe --install-service
+          $servicePath = "`"$canonicalExe`" --service"
+          if (Get-Service -Name Rustdesk -ErrorAction SilentlyContinue) {
+            & sc.exe config Rustdesk "binPath= $servicePath" "start= auto" | Out-Null
+          } else {
+            & sc.exe create Rustdesk "binPath= $servicePath" "start= auto" "DisplayName= RustDesk Service" | Out-Null
+          }
+          & sc.exe description Rustdesk "Smartia Remote unattended service" | Out-Null
+
+          $deadline = (Get-Date).AddSeconds(60)
           $service = $null
           while ((Get-Date) -lt $deadline) {
-            $service = Get-Service -Name RustDesk -ErrorAction SilentlyContinue
-            if ($service) {
-              if ($service.Status -ne 'Running') {
-                Start-Service -Name RustDesk -ErrorAction SilentlyContinue
-              }
-              $service.Refresh()
-              if ($service.Status -eq 'Running') { break }
-            }
+            & sc.exe start Rustdesk | Out-Null 2>$null
+            $service = Get-CimInstance Win32_Service -Filter "Name='Rustdesk'" -ErrorAction SilentlyContinue
+            if ($service -and $service.State -eq 'Running' -and $service.PathName -match '(?i)rustdesk\.exe') { break }
             Start-Sleep -Seconds 3
           }
-          if (-not $service) { throw "RustDesk Windows Service was not created by the installer." }
-          $service.Refresh()
-          if ($service.Status -ne 'Running') { throw "RustDesk Windows Service is not running." }
-          $path = (Get-CimInstance Win32_Service -Filter "Name='RustDesk'").PathName
-          if ($path -notmatch '(?i)rustdesk\.exe') { throw "RustDesk service does not use the canonical executable." }
+          if (-not $service -or $service.State -ne 'Running') { throw "RustDesk Windows Service is not running." }
+          if ($service.PathName -notmatch '(?i)rustdesk\.exe') { throw "RustDesk service does not use the canonical executable." }
 
       - name: Upload Smartia final installer artifact
         if: env.UPLOAD_ARTIFACT == 'true'
