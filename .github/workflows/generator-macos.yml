@@ -139,12 +139,12 @@ jobs:
           # MACSTUFF Update Info.plist
           sed -i '' -e 's|<key>CFBundleName</key>.*<string>.*</string>|<key>CFBundleName</key>\n\t<string>${{ env.appname }}</string>|' ./flutter/macos/Runner/Info.plist
           sed -i '' -e 's|<key>CFBundleDisplayName</key>.*<string>.*</string>|<key>CFBundleDisplayName</key>\n\t<string>${{ env.appname }}</string>|' ./flutter/macos/Runner/Info.plist
-          sed -i '' -e 's|<key>CFBundleIdentifier</key>.*<string>.*</string>|<key>CFBundleIdentifier</key>\n\t<string>com.${{ env.appname }}.app</string>|' ./flutter/macos/Runner/Info.plist
+          sed -i '' -e 's|<key>CFBundleIdentifier</key>.*<string>.*</string>|<key>CFBundleIdentifier</key>\n\t<string>com.smartia.remote</string>|' ./flutter/macos/Runner/Info.plist
           # sed -i '' '/<key>NSHumanReadableCopyright<\/key>/{n;s/<string>.*<\/string>/<string>Copyright 2025 ${{ env.appname }}. All rights reserved.<\/string>/;}' ./flutter/macos/Runner/Info.plist
           
           # MACSTUFF Update AppInfo.xcconfig
           sed -i '' -e 's|PRODUCT_NAME = .*|PRODUCT_NAME = ${{ env.appname }}|' ./flutter/macos/Runner/Configs/AppInfo.xcconfig
-          sed -i '' -e 's|PRODUCT_BUNDLE_IDENTIFIER = .*|PRODUCT_BUNDLE_IDENTIFIER = com.${{ env.appname }}.app|' ./flutter/macos/Runner/Configs/AppInfo.xcconfig
+          sed -i '' -e 's|PRODUCT_BUNDLE_IDENTIFIER = .*|PRODUCT_BUNDLE_IDENTIFIER = com.smartia.remote|' ./flutter/macos/Runner/Configs/AppInfo.xcconfig
           sed -i '' -e 's|Purslane Ltd.|${{ env.appname }}|' ./flutter/macos/Runner/Configs/AppInfo.xcconfig
           # Keep DEVELOPMENT_TEAM if it exists, don't blank it out
 
@@ -153,7 +153,7 @@ jobs:
           
           # Update Xcode project settings
           sed -i '' -e 's/PRODUCT_NAME = "RustDesk"/PRODUCT_NAME = "${{ env.appname }}"/' ./flutter/macos/Runner.xcodeproj/project.pbxproj
-          sed -i '' -e 's/PRODUCT_BUNDLE_IDENTIFIER = ".*"/PRODUCT_BUNDLE_IDENTIFIER = "com.${{ env.appname }}.app"/' ./flutter/macos/Runner.xcodeproj/project.pbxproj
+          sed -i '' -e 's/PRODUCT_BUNDLE_IDENTIFIER = ".*"/PRODUCT_BUNDLE_IDENTIFIER = "com.smartia.remote"/' ./flutter/macos/Runner.xcodeproj/project.pbxproj
           # Don't modify DEVELOPMENT_TEAM in project.pbxproj
 
           # Update CMake settings
@@ -581,11 +581,17 @@ jobs:
             echo "No Developer ID secret; applying one consistent ad-hoc signature to the complete bundle."
             # --deep signs nested Flutter frameworks, dylibs and the service with
             # the same Team ID, preventing dyld Team ID mismatch at launch.
-            codesign --force --deep --sign - --timestamp=none --options runtime "$APP_BUNDLE"
+            codesign --force --deep --sign - --timestamp=none "$APP_BUNDLE"
             SIGNING_MODE="adhoc"
           fi
 
           codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
+          plutil -lint "$APP_BUNDLE/Contents/Info.plist"
+          bundle_id=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_BUNDLE/Contents/Info.plist")
+          test "$bundle_id" = "com.smartia.remote"
+          executable=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP_BUNDLE/Contents/Info.plist")
+          test -x "$APP_BUNDLE/Contents/MacOS/$executable"
+          "$APP_BUNDLE/Contents/MacOS/$executable" --version >/dev/null 2>&1
           codesign -dv --verbose=4 "$APP_BUNDLE" 2>&1 | tee signing.txt
           grep -q "Signature=" signing.txt
           echo "macOS signing verified: $SIGNING_MODE"
