@@ -628,14 +628,18 @@ jobs:
           $targetHash = if (Test-Path $canonicalExe) { (Get-FileHash -Path $canonicalExe -Algorithm SHA256).Hash } else { "" }
           if ($sourceHash -ne $targetHash) { Copy-Item -Path $sourceExe -Destination $canonicalExe -Force }
 
-          & $canonicalExe --install-service
-          $servicePath = "`"$canonicalExe`" --service"
-          if (Get-Service -Name Rustdesk -ErrorAction SilentlyContinue) {
-            & sc.exe config Rustdesk "binPath= $servicePath" "start= auto" | Out-Null
+          $servicePath = ('"{0}" --service' -f $canonicalExe)
+          $serviceCim = Get-CimInstance Win32_Service -Filter "Name='Rustdesk'" -ErrorAction SilentlyContinue
+          if ($serviceCim) {
+            Invoke-CimMethod -InputObject $serviceCim -MethodName Change -Arguments @{
+              PathName = $servicePath
+              StartMode = 'Automatic'
+              DisplayName = 'RustDesk Service'
+            } | Out-Null
           } else {
-            & sc.exe create Rustdesk "binPath= $servicePath" "start= auto" "DisplayName= RustDesk Service" | Out-Null
+            New-Service -Name Rustdesk -BinaryPathName $servicePath -DisplayName 'RustDesk Service' -StartupType Automatic | Out-Null
           }
-          & sc.exe description Rustdesk "Smartia Remote unattended service" | Out-Null
+          $serviceCim = Get-CimInstance Win32_Service -Filter "Name='Rustdesk'" -ErrorAction Stop
 
           $deadline = (Get-Date).AddSeconds(60)
           $service = $null
