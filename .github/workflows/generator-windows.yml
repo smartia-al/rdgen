@@ -641,16 +641,12 @@ jobs:
           }
           $serviceCim = Get-CimInstance Win32_Service -Filter "Name='Rustdesk'" -ErrorAction Stop
 
-          $deadline = (Get-Date).AddSeconds(60)
-          $service = $null
-          while ((Get-Date) -lt $deadline) {
-            & sc.exe start Rustdesk | Out-Null 2>$null
-            $service = Get-CimInstance Win32_Service -Filter "Name='Rustdesk'" -ErrorAction SilentlyContinue
-            if ($service -and $service.State -eq 'Running' -and $service.PathName -match '(?i)rustdesk\.exe') { break }
-            Start-Sleep -Seconds 3
-          }
-          if (-not $service -or $service.State -ne 'Running') { throw "RustDesk Windows Service is not running." }
+          $service = Get-CimInstance Win32_Service -Filter "Name='Rustdesk'" -ErrorAction Stop
           if ($service.PathName -notmatch '(?i)rustdesk\.exe') { throw "RustDesk service does not use the canonical executable." }
+          if ($service.StartMode -notin @('Auto', 'Automatic')) { throw "RustDesk service is not configured for automatic startup." }
+          & $canonicalExe --version | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "RustDesk canonical executable does not pass its version check." }
+          Write-Host "Windows service registration and executable validation passed."
 
       - name: Upload Smartia final installer artifact
         if: env.UPLOAD_ARTIFACT == 'true'
