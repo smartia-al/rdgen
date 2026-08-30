@@ -608,8 +608,11 @@ jobs:
         run: |
           $installer = (Resolve-Path "./SignOutput/${{ env.filename }}.exe").Path
           if (-not (Test-Path $installer)) { throw "Final Windows installer is missing." }
-          $appName = "${{ env.appname }}"
-          if ([string]::IsNullOrWhiteSpace($appName) -or $appName -notmatch '^[A-Za-z0-9 ._-]+$') { throw "Custom app identity is invalid." }
+          # `appname` is the public label and may contain spaces.  RustDesk
+          # dispatches the Windows service by `app-name` from custom.txt, so
+          # use the safe executable identity for SCM instead.
+          $appName = "${{ env.filename }}"
+          if ([string]::IsNullOrWhiteSpace($appName) -or $appName -notmatch '^[A-Za-z0-9_-]+$') { throw "Custom Windows service identity is invalid." }
 
           # The final EXE is a self-extracting portable packer.  Running it
           # directly as --service only starts the packer and lets SCM see a
