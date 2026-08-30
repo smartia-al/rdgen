@@ -629,6 +629,19 @@ jobs:
           }
           if (-not (Test-Path $installedExe)) { throw "Portable installer did not extract the Smartia client." }
 
+          # RDGen keeps the custom profile next to the portable inner client.
+          # RustDesk's native EXE install copies the binary to Program Files but
+          # not this profile; without it the service dispatcher reverts to a
+          # different name and SCM returns 1053. Reproduce the public installer
+          # handoff here so an artifact cannot pass CI with that defect.
+          $portableDir = Join-Path $env:LOCALAPPDATA "${{ env.appname }}"
+          $customProfile = @(
+            (Join-Path $portableDir 'custom_.txt'),
+            (Join-Path $portableDir 'custom.txt')
+          ) | Where-Object { Test-Path $_ -PathType Leaf } | Select-Object -First 1
+          if (-not $customProfile) { throw "Portable installer did not extract its custom service profile." }
+          Copy-Item -Path $customProfile -Destination (Join-Path $installDir (Split-Path -Leaf $customProfile)) -Force
+
           $servicePath = ('"{0}" --service' -f $installedExe)
           $escapedName = $appName.Replace("'", "''")
           $serviceQuery = "Name='$escapedName'"
