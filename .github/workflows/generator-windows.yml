@@ -611,12 +611,20 @@ jobs:
           $appName = "${{ env.appname }}"
           if ([string]::IsNullOrWhiteSpace($appName) -or $appName -notmatch '^[A-Za-z0-9 ._-]+$') { throw "Custom app identity is invalid." }
 
-          # The portable artifact is copied to the exact path compiled into
-          # RustDesk. Service name, path and executable identity must match.
+          # The final EXE is a self-extracting portable packer.  Running it
+          # directly as --service only starts the packer and lets SCM see a
+          # clean exit.  Exercise the same silent-install path as the public
+          # Smartia installer, then validate the inner executable and service.
+          & $installer --silent-install
+          if ($LASTEXITCODE -ne 0) { throw "Portable installer failed with exit code $LASTEXITCODE." }
+
           $installDir = Join-Path $env:ProgramFiles $appName
           $installedExe = Join-Path $installDir ($appName + ".exe")
-          New-Item -ItemType Directory -Force -Path $installDir | Out-Null
-          Copy-Item -Path $installer -Destination $installedExe -Force
+          $deadline = (Get-Date).AddSeconds(90)
+          while ((Get-Date) -lt $deadline -and -not (Test-Path $installedExe)) {
+            Start-Sleep -Seconds 3
+          }
+          if (-not (Test-Path $installedExe)) { throw "Portable installer did not extract the Smartia client." }
 
           $servicePath = ('"{0}" --service' -f $installedExe)
           $escapedName = $appName.Replace("'", "''")
@@ -633,7 +641,15 @@ jobs:
             New-Service -Name $appName -BinaryPathName $servicePath -DisplayName ($appName + ' Service') -StartupType Automatic | Out-Null
           }
 
-          $service = Get-CimInstance Win32_Service -Filter $serviceQuery -ErrorAction Stop
+          $deadline = (Get-Date).AddSeconds(60)
+          $service = $null
+          while ((Get-Date) -lt $deadline) {
+            Start-Service -Name $appName -ErrorAction SilentlyContinue
+            $service = Get-CimInstance Win32_Service -Filter $serviceQuery -ErrorAction SilentlyContinue
+            if ($service -and $service.State -eq 'Running' -and $service.PathName -match [regex]::Escape($installedExe)) { break }
+            Start-Sleep -Seconds 3
+          }
+          if (-not $service -or $service.State -ne 'Running') { throw "Custom Windows service did not reach Running after portable installation." }
           if ($service.PathName -notmatch [regex]::Escape($installedExe)) { throw "Custom service does not use its compiled install path." }
           if ($service.StartMode -notin @('Auto', 'Automatic')) { throw "Custom service is not configured for automatic startup." }
           & $installedExe --version | Out-Null
