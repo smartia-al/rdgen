@@ -628,6 +628,9 @@ jobs:
           $targetHash = if (Test-Path $canonicalExe) { (Get-FileHash -Path $canonicalExe -Algorithm SHA256).Hash } else { "" }
           if ($sourceHash -ne $targetHash) { Copy-Item -Path $sourceExe -Destination $canonicalExe -Force }
 
+          & $canonicalExe --install-service
+          if ($LASTEXITCODE -ne 0) { throw "RustDesk native service initialization failed with exit code $LASTEXITCODE." }
+
           $servicePath = ('"{0}" --service' -f $canonicalExe)
           $serviceCim = Get-CimInstance Win32_Service -Filter "Name='Rustdesk'" -ErrorAction SilentlyContinue
           if ($serviceCim) {
