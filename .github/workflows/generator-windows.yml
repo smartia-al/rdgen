@@ -608,48 +608,37 @@ jobs:
         run: |
           $installer = (Resolve-Path "./SignOutput/${{ env.filename }}.exe").Path
           if (-not (Test-Path $installer)) { throw "Final Windows installer is missing." }
-          Start-Process -FilePath $installer -ArgumentList '--silent-install' -Wait | Out-Null
+          $appName = "${{ env.appname }}"
+          if ([string]::IsNullOrWhiteSpace($appName) -or $appName -notmatch '^[A-Za-z0-9 ._-]+$') { throw "Custom app identity is invalid." }
 
-          $candidates = @(
-            (Join-Path $env:ProgramFiles "RustDesk\rustdesk.exe"),
-            (Join-Path $env:ProgramFiles "${{ env.filename }}\${{ env.filename }}.exe"),
-            (Join-Path $env:ProgramFiles "${{ env.appname }}\${{ env.appname }}.exe")
-          ) | Where-Object { Test-Path $_ }
-          if (-not $candidates) {
-            Write-Host "Final artifact is portable; installing it into the canonical RustDesk service location."
-            $candidates = @($installer)
-          }
+          # The portable artifact is copied to the exact path compiled into
+          # RustDesk. Service name, path and executable identity must match.
+          $installDir = Join-Path $env:ProgramFiles $appName
+          $installedExe = Join-Path $installDir ($appName + ".exe")
+          New-Item -ItemType Directory -Force -Path $installDir | Out-Null
+          Copy-Item -Path $installer -Destination $installedExe -Force
 
-          $canonicalDir = Join-Path $env:ProgramFiles "RustDesk"
-          $canonicalExe = Join-Path $canonicalDir "rustdesk.exe"
-          New-Item -ItemType Directory -Force -Path $canonicalDir | Out-Null
-          $sourceExe = $candidates[0]
-          $sourceHash = (Get-FileHash -Path $sourceExe -Algorithm SHA256).Hash
-          $targetHash = if (Test-Path $canonicalExe) { (Get-FileHash -Path $canonicalExe -Algorithm SHA256).Hash } else { "" }
-          if ($sourceHash -ne $targetHash) { Copy-Item -Path $sourceExe -Destination $canonicalExe -Force }
-
-          & $canonicalExe --install-service
-          if ($LASTEXITCODE -ne 0) { throw "RustDesk native service initialization failed with exit code $LASTEXITCODE." }
-
-          $servicePath = ('"{0}" --service' -f $canonicalExe)
-          $serviceCim = Get-CimInstance Win32_Service -Filter "Name='Rustdesk'" -ErrorAction SilentlyContinue
+          $servicePath = ('"{0}" --service' -f $installedExe)
+          $escapedName = $appName.Replace("'", "''")
+          $serviceQuery = "Name='$escapedName'"
+          $serviceCim = Get-CimInstance Win32_Service -Filter $serviceQuery -ErrorAction SilentlyContinue
           if ($serviceCim) {
-            Invoke-CimMethod -InputObject $serviceCim -MethodName Change -Arguments @{
+            $change = Invoke-CimMethod -InputObject $serviceCim -MethodName Change -Arguments @{
               PathName = $servicePath
               StartMode = 'Automatic'
-              DisplayName = 'RustDesk Service'
-            } | Out-Null
+              DisplayName = ($appName + ' Service')
+            }
+            if ($change.ReturnValue -ne 0) { throw "Windows rejected the custom service configuration: $($change.ReturnValue)." }
           } else {
-            New-Service -Name Rustdesk -BinaryPathName $servicePath -DisplayName 'RustDesk Service' -StartupType Automatic | Out-Null
+            New-Service -Name $appName -BinaryPathName $servicePath -DisplayName ($appName + ' Service') -StartupType Automatic | Out-Null
           }
-          $serviceCim = Get-CimInstance Win32_Service -Filter "Name='Rustdesk'" -ErrorAction Stop
 
-          $service = Get-CimInstance Win32_Service -Filter "Name='Rustdesk'" -ErrorAction Stop
-          if ($service.PathName -notmatch '(?i)rustdesk\.exe') { throw "RustDesk service does not use the canonical executable." }
-          if ($service.StartMode -notin @('Auto', 'Automatic')) { throw "RustDesk service is not configured for automatic startup." }
-          & $canonicalExe --version | Out-Null
-          if ($LASTEXITCODE -ne 0) { throw "RustDesk canonical executable does not pass its version check." }
-          Write-Host "Windows service registration and executable validation passed."
+          $service = Get-CimInstance Win32_Service -Filter $serviceQuery -ErrorAction Stop
+          if ($service.PathName -notmatch [regex]::Escape($installedExe)) { throw "Custom service does not use its compiled install path." }
+          if ($service.StartMode -notin @('Auto', 'Automatic')) { throw "Custom service is not configured for automatic startup." }
+          & $installedExe --version | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "Custom executable does not pass its version check." }
+          Write-Host "Windows custom service registration and executable validation passed."
 
       - name: Upload Smartia final installer artifact
         if: env.UPLOAD_ARTIFACT == 'true'
