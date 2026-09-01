@@ -642,6 +642,11 @@ jobs:
           $escapedService = $serviceName.Replace("'", "''")
           $service = Get-CimInstance Win32_Service -Filter "Name='$escapedService'" -ErrorAction SilentlyContinue
           if (-not $service) { throw "Installed custom client did not register its service '$serviceName'." }
+          # Emit only non-secret installation facts.  This makes a service-path
+          # mismatch actionable without exposing the embedded custom profile.
+          Write-Host "MSI install directory: $installDir"
+          Write-Host "MSI client executable: $installedExe"
+          Write-Host "Windows service executable: $($service.PathName)"
           if ($service.PathName -notmatch [regex]::Escape($installedExe)) { throw "Custom service does not use the MSI-installed executable." }
           if ($service.StartMode -notin @('Auto', 'Automatic')) { throw "Custom service is not configured for automatic startup." }
 
