@@ -616,6 +616,7 @@ jobs:
           # this is the package which must install the full runtime bundle,
           # create the normal Windows registration and provide shortcuts.
           $publicName = "${{ env.appname }}"
+          $msiProductName = $publicName -replace '\s', '_'
           $serviceName = "${{ env.filename }}"
           if ([string]::IsNullOrWhiteSpace($serviceName) -or $serviceName -notmatch '^[A-Za-z0-9_-]+$') { throw "Custom Windows service identity is invalid." }
           $msiLog = Join-Path $env:TEMP 'smartia-rdgen-msi-install.log'
@@ -627,7 +628,7 @@ jobs:
             'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
           )
           $registration = Get-ItemProperty $uninstallRoots -ErrorAction SilentlyContinue |
-            Where-Object { $_.DisplayName -eq $publicName -and $_.InstallLocation } |
+            Where-Object { $_.DisplayName -in @($publicName, $msiProductName) -and $_.InstallLocation } |
             Select-Object -First 1
           if (-not $registration) { throw "MSI did not create an installed-app registration for the custom client." }
           $installDir = $registration.InstallLocation.TrimEnd('\\')
