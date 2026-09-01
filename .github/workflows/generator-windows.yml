@@ -622,7 +622,7 @@ jobs:
           # the executable's display name can contain spaces and would create
           # a second, differently named service outside the MSI installation.
           $serviceName = $msiProductName
-          if ([string]::IsNullOrWhiteSpace($serviceName) -or $serviceName -notmatch '^[A-Za-z0-9_-]+$') { throw "Custom Windows service identity is invalid." }
+          if ([string]::IsNullOrWhiteSpace($serviceName) -or $serviceName -notmatch '^[A-Za-z0-9_.-]+$') { throw "Custom Windows service identity is invalid." }
           $msiLog = Join-Path $env:TEMP 'smartia-rdgen-msi-install.log'
           $install = Start-Process -FilePath "$env:SystemRoot\System32\msiexec.exe" -ArgumentList ('/i "{0}" /qn /norestart /L*V "{1}"' -f $msi, $msiLog) -Wait -PassThru -WindowStyle Hidden
           if ($install.ExitCode -notin @(0, 3010)) { throw "Windows MSI installation failed with exit code $($install.ExitCode). See $msiLog." }
