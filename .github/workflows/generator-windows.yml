@@ -617,7 +617,11 @@ jobs:
           # create the normal Windows registration and provide shortcuts.
           $publicName = "${{ env.appname }}"
           $msiProductName = $publicName -replace '\s', '_'
-          $serviceName = "${{ env.filename }}"
+          # The MSI's own custom action creates the product service with the
+          # MSI product identity.  Do not run --install-service afterwards:
+          # the executable's display name can contain spaces and would create
+          # a second, differently named service outside the MSI installation.
+          $serviceName = $msiProductName
           if ([string]::IsNullOrWhiteSpace($serviceName) -or $serviceName -notmatch '^[A-Za-z0-9_-]+$') { throw "Custom Windows service identity is invalid." }
           $msiLog = Join-Path $env:TEMP 'smartia-rdgen-msi-install.log'
           $install = Start-Process -FilePath "$env:SystemRoot\System32\msiexec.exe" -ArgumentList ('/i "{0}" /qn /norestart /L*V "{1}"' -f $msi, $msiLog) -Wait -PassThru -WindowStyle Hidden
@@ -637,8 +641,6 @@ jobs:
           if (-not (Test-Path (Join-Path $installDir 'custom_.txt'))) { throw "MSI did not install the custom client profile." }
           if (-not (Get-ChildItem -Path $installDir -Filter '*.dll' -File -ErrorAction SilentlyContinue | Select-Object -First 1)) { throw "MSI did not install the client runtime DLL bundle." }
 
-          $serviceInstall = Start-Process -FilePath $installedExe -ArgumentList '--install-service' -Wait -PassThru -WindowStyle Hidden
-          if ($serviceInstall.ExitCode -ne 0) { throw "Installed custom client could not initialize its native service: $($serviceInstall.ExitCode)." }
           $escapedService = $serviceName.Replace("'", "''")
           $service = Get-CimInstance Win32_Service -Filter "Name='$escapedService'" -ErrorAction SilentlyContinue
           if (-not $service) { throw "Installed custom client did not register its service '$serviceName'." }
@@ -649,6 +651,9 @@ jobs:
           Write-Host "Windows service executable: $($service.PathName)"
           if ($service.PathName -notmatch [regex]::Escape($installedExe)) { throw "Custom service does not use the MSI-installed executable." }
           if ($service.StartMode -notin @('Auto', 'Automatic')) { throw "Custom service is not configured for automatic startup." }
+          if ($service.State -ne 'Running') { Start-Service -Name $serviceName -ErrorAction Stop; Start-Sleep -Seconds 2 }
+          $service = Get-CimInstance Win32_Service -Filter "Name='$escapedService'" -ErrorAction Stop
+          if ($service.State -ne 'Running') { throw "Custom Windows service did not start after MSI installation." }
 
           $version = Start-Process -FilePath $installedExe -ArgumentList '--version' -Wait -PassThru -WindowStyle Hidden
           if ($version.ExitCode -ne 0) { throw "MSI-installed custom executable does not pass its version check." }
