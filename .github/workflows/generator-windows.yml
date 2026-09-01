@@ -602,78 +602,52 @@ jobs:
         run: |
           mv ./SignOutput/rustdesk.msi "./SignOutput/${{ env.filename }}.msi" || echo "rustdesk"
 
-      - name: Verify unattended Windows service
+      - name: Verify unattended Windows MSI installation
         if: env.UPLOAD_ARTIFACT == 'true'
         shell: pwsh
         run: |
-          $installer = (Resolve-Path "./SignOutput/${{ env.filename }}.exe").Path
-          if (-not (Test-Path $installer)) { throw "Final Windows installer is missing." }
-          # `appname` is the public label and may contain spaces.  RustDesk
-          # dispatches the Windows service by `app-name` from custom.txt, so
-          # use the safe executable identity for SCM instead.
-          $appName = "${{ env.filename }}"
-          if ([string]::IsNullOrWhiteSpace($appName) -or $appName -notmatch '^[A-Za-z0-9_-]+$') { throw "Custom Windows service identity is invalid." }
+          $ErrorActionPreference = 'Stop'
+          $msi = (Resolve-Path "./SignOutput/${{ env.filename }}.msi").Path
+          if (-not (Test-Path $msi)) { throw "Final Windows MSI is missing." }
 
-          # The final EXE is a self-extracting portable packer.  Running it
-          # directly as --service only starts the packer and lets SCM see a
-          # clean exit.  Exercise the same silent-install path as the public
-          # Smartia installer, then validate the inner executable and service.
-          # Start-Process gives this asynchronous portable launcher a real,
-          # deterministic exit code. Calling it with `&` leaves LASTEXITCODE
-          # unset on current Windows runners and falsely fails every build.
-          $installProcess = Start-Process -FilePath $installer -ArgumentList '--silent-install' -Wait -PassThru -WindowStyle Hidden
-          if ($installProcess.ExitCode -ne 0) { throw "Portable installer failed with exit code $($installProcess.ExitCode)." }
+          # The EXE artifact is intentionally a portable packer.  It is not a
+          # Windows installer and must never be treated as one by this test or
+          # by the public deployment route.  Test the matching MSI instead:
+          # this is the package which must install the full runtime bundle,
+          # create the normal Windows registration and provide shortcuts.
+          $publicName = "${{ env.appname }}"
+          $serviceName = "${{ env.filename }}"
+          if ([string]::IsNullOrWhiteSpace($serviceName) -or $serviceName -notmatch '^[A-Za-z0-9_-]+$') { throw "Custom Windows service identity is invalid." }
+          $msiLog = Join-Path $env:TEMP 'smartia-rdgen-msi-install.log'
+          $install = Start-Process -FilePath "$env:SystemRoot\System32\msiexec.exe" -ArgumentList ('/i "{0}" /qn /norestart /L*V "{1}"' -f $msi, $msiLog) -Wait -PassThru -WindowStyle Hidden
+          if ($install.ExitCode -notin @(0, 3010)) { throw "Windows MSI installation failed with exit code $($install.ExitCode). See $msiLog." }
 
-          $installDir = Join-Path $env:ProgramFiles $appName
-          $installedExe = Join-Path $installDir ($appName + ".exe")
-          $deadline = (Get-Date).AddSeconds(90)
-          while ((Get-Date) -lt $deadline -and -not (Test-Path $installedExe)) {
-            Start-Sleep -Seconds 3
-          }
-          if (-not (Test-Path $installedExe)) { throw "Portable installer did not extract the Smartia client." }
+          $uninstallRoots = @(
+            'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*',
+            'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+          )
+          $registration = Get-ItemProperty $uninstallRoots -ErrorAction SilentlyContinue |
+            Where-Object { $_.DisplayName -eq $publicName -and $_.InstallLocation } |
+            Select-Object -First 1
+          if (-not $registration) { throw "MSI did not create an installed-app registration for the custom client." }
+          $installDir = $registration.InstallLocation.TrimEnd('\\')
+          $installedExe = Get-ChildItem -Path $installDir -Filter '*.exe' -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -notmatch 'uninstall' } | Select-Object -First 1
+          if (-not $installedExe) { throw "MSI registration exists but the custom client executable is missing." }
+          if (-not (Test-Path (Join-Path $installDir 'custom_.txt'))) { throw "MSI did not install the custom client profile." }
+          if (-not (Get-ChildItem -Path $installDir -Filter '*.dll' -File -ErrorAction SilentlyContinue | Select-Object -First 1)) { throw "MSI did not install the client runtime DLL bundle." }
 
-          # RDGen keeps the custom profile next to the portable inner client.
-          # RustDesk's native EXE install copies the binary to Program Files but
-          # not this profile; without it the service dispatcher reverts to a
-          # different name and SCM returns 1053. Reproduce the public installer
-          # handoff here so an artifact cannot pass CI with that defect.
-          $portableDir = Join-Path $env:LOCALAPPDATA "${{ env.appname }}"
-          $customProfile = @(
-            (Join-Path $portableDir 'custom_.txt'),
-            (Join-Path $portableDir 'custom.txt')
-          ) | Where-Object { Test-Path $_ -PathType Leaf } | Select-Object -First 1
-          if (-not $customProfile) { throw "Portable installer did not extract its custom service profile." }
-          Copy-Item -Path $customProfile -Destination (Join-Path $installDir (Split-Path -Leaf $customProfile)) -Force
-
-          $servicePath = ('"{0}" --service' -f $installedExe)
-          $escapedName = $appName.Replace("'", "''")
-          $serviceQuery = "Name='$escapedName'"
-          $serviceCim = Get-CimInstance Win32_Service -Filter $serviceQuery -ErrorAction SilentlyContinue
-          if ($serviceCim) {
-            $change = Invoke-CimMethod -InputObject $serviceCim -MethodName Change -Arguments @{
-              PathName = $servicePath
-              StartMode = 'Automatic'
-              DisplayName = ($appName + ' Service')
-            }
-            if ($change.ReturnValue -ne 0) { throw "Windows rejected the custom service configuration: $($change.ReturnValue)." }
-          } else {
-            New-Service -Name $appName -BinaryPathName $servicePath -DisplayName ($appName + ' Service') -StartupType Automatic | Out-Null
-          }
-
-          $deadline = (Get-Date).AddSeconds(60)
-          $service = $null
-          while ((Get-Date) -lt $deadline) {
-            Start-Service -Name $appName -ErrorAction SilentlyContinue
-            $service = Get-CimInstance Win32_Service -Filter $serviceQuery -ErrorAction SilentlyContinue
-            if ($service -and $service.State -eq 'Running' -and $service.PathName -match [regex]::Escape($installedExe)) { break }
-            Start-Sleep -Seconds 3
-          }
-          if (-not $service -or $service.State -ne 'Running') { throw "Custom Windows service did not reach Running after portable installation." }
-          if ($service.PathName -notmatch [regex]::Escape($installedExe)) { throw "Custom service does not use its compiled install path." }
+          $serviceInstall = Start-Process -FilePath $installedExe.FullName -ArgumentList '--install-service' -Wait -PassThru -WindowStyle Hidden
+          if ($serviceInstall.ExitCode -ne 0) { throw "Installed custom client could not initialize its native service: $($serviceInstall.ExitCode)." }
+          $escapedService = $serviceName.Replace("'", "''")
+          $service = Get-CimInstance Win32_Service -Filter "Name='$escapedService'" -ErrorAction SilentlyContinue
+          if (-not $service) { throw "Installed custom client did not register its service '$serviceName'." }
+          if ($service.PathName -notmatch [regex]::Escape($installedExe.FullName)) { throw "Custom service does not use the MSI-installed executable." }
           if ($service.StartMode -notin @('Auto', 'Automatic')) { throw "Custom service is not configured for automatic startup." }
-          & $installedExe --version | Out-Null
-          if ($LASTEXITCODE -ne 0) { throw "Custom executable does not pass its version check." }
-          Write-Host "Windows custom service registration and executable validation passed."
+
+          $version = Start-Process -FilePath $installedExe.FullName -ArgumentList '--version' -Wait -PassThru -WindowStyle Hidden
+          if ($version.ExitCode -ne 0) { throw "MSI-installed custom executable does not pass its version check." }
+          Write-Host "Windows native MSI installation, runtime bundle and service registration validation passed."
 
       - name: Upload Smartia final installer artifact
         if: env.UPLOAD_ARTIFACT == 'true'
