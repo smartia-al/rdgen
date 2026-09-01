@@ -618,8 +618,11 @@ jobs:
           # directly as --service only starts the packer and lets SCM see a
           # clean exit.  Exercise the same silent-install path as the public
           # Smartia installer, then validate the inner executable and service.
-          & $installer --silent-install
-          if ($LASTEXITCODE -ne 0) { throw "Portable installer failed with exit code $LASTEXITCODE." }
+          # Start-Process gives this asynchronous portable launcher a real,
+          # deterministic exit code. Calling it with `&` leaves LASTEXITCODE
+          # unset on current Windows runners and falsely fails every build.
+          $installProcess = Start-Process -FilePath $installer -ArgumentList '--silent-install' -Wait -PassThru -WindowStyle Hidden
+          if ($installProcess.ExitCode -ne 0) { throw "Portable installer failed with exit code $($installProcess.ExitCode)." }
 
           $installDir = Join-Path $env:ProgramFiles $appName
           $installedExe = Join-Path $installDir ($appName + ".exe")
