@@ -36,6 +36,10 @@ env:
   #signing keys env variable checks
   ANDROID_SIGNING_KEY: "${{ secrets.ANDROID_SIGNING_KEY }}"
   MACOS_P12_BASE64: "${{ secrets.MACOS_P12_BASE64 }}"
+  MACOS_P12_PASSWORD: "${{ secrets.MACOS_P12_PASSWORD }}"
+  MACOS_NOTARY_KEY_ID: "${{ secrets.MACOS_NOTARY_KEY_ID }}"
+  MACOS_NOTARY_ISSUER_ID: "${{ secrets.MACOS_NOTARY_ISSUER_ID }}"
+  MACOS_NOTARY_PRIVATE_KEY_BASE64: "${{ secrets.MACOS_NOTARY_PRIVATE_KEY_BASE64 }}"
   UPLOAD_ARTIFACT: 'true'
   SIGN_BASE_URL: "${{ secrets.SIGN_BASE_URL }}"
 
@@ -136,15 +140,35 @@ jobs:
           cp ./flutter/macos/Runner/Info.plist ./flutter/macos/Runner/Info.plist.bak
           cp ./flutter/macos/Runner/Configs/AppInfo.xcconfig ./flutter/macos/Runner/Configs/AppInfo.xcconfig.bak
          
-          # MACSTUFF Update Info.plist
-          sed -i '' -e 's|<key>CFBundleName</key>.*<string>.*</string>|<key>CFBundleName</key>\n\t<string>${{ env.appname }}</string>|' ./flutter/macos/Runner/Info.plist
-          sed -i '' -e 's|<key>CFBundleDisplayName</key>.*<string>.*</string>|<key>CFBundleDisplayName</key>\n\t<string>${{ env.appname }}</string>|' ./flutter/macos/Runner/Info.plist
-          sed -i '' -e 's|<key>CFBundleIdentifier</key>.*<string>.*</string>|<key>CFBundleIdentifier</key>\n\t<string>com.smartia.remote</string>|' ./flutter/macos/Runner/Info.plist
+          # `Info.plist` keys and values are on separate lines, so the former
+          # line-oriented `sed` expressions never changed them.  Mutate the
+          # plist structurally and keep the bundle ID explicit per build.
+          APP_NAME='${{ env.appname }}'
+          BUNDLE_ID='${{ env.macos_bundle_id }}'
+          if [ -z "$BUNDLE_ID" ]; then BUNDLE_ID='com.smartia.remote'; fi
+          case "$BUNDLE_ID" in
+            [A-Za-z0-9]*.[A-Za-z0-9.-]*) ;;
+            *) echo "Invalid macOS bundle identifier" >&2; exit 1 ;;
+          esac
+          APP_NAME="$APP_NAME" BUNDLE_ID="$BUNDLE_ID" python3 - <<'PY'
+          import os
+          import plistlib
+          from pathlib import Path
+
+          path = Path('flutter/macos/Runner/Info.plist')
+          with path.open('rb') as handle:
+              payload = plistlib.load(handle)
+          payload['CFBundleName'] = os.environ['APP_NAME']
+          payload['CFBundleDisplayName'] = os.environ['APP_NAME']
+          payload['CFBundleIdentifier'] = os.environ['BUNDLE_ID']
+          with path.open('wb') as handle:
+              plistlib.dump(payload, handle, sort_keys=False)
+          PY
           # sed -i '' '/<key>NSHumanReadableCopyright<\/key>/{n;s/<string>.*<\/string>/<string>Copyright 2025 ${{ env.appname }}. All rights reserved.<\/string>/;}' ./flutter/macos/Runner/Info.plist
           
           # MACSTUFF Update AppInfo.xcconfig
           sed -i '' -e 's|PRODUCT_NAME = .*|PRODUCT_NAME = ${{ env.appname }}|' ./flutter/macos/Runner/Configs/AppInfo.xcconfig
-          sed -i '' -e 's|PRODUCT_BUNDLE_IDENTIFIER = .*|PRODUCT_BUNDLE_IDENTIFIER = com.smartia.remote|' ./flutter/macos/Runner/Configs/AppInfo.xcconfig
+          sed -i '' -e "s|PRODUCT_BUNDLE_IDENTIFIER = .*|PRODUCT_BUNDLE_IDENTIFIER = $BUNDLE_ID|" ./flutter/macos/Runner/Configs/AppInfo.xcconfig
           sed -i '' -e 's|Purslane Ltd.|${{ env.appname }}|' ./flutter/macos/Runner/Configs/AppInfo.xcconfig
           # Keep DEVELOPMENT_TEAM if it exists, don't blank it out
 
@@ -153,7 +177,7 @@ jobs:
           
           # Update Xcode project settings
           sed -i '' -e 's/PRODUCT_NAME = "RustDesk"/PRODUCT_NAME = "${{ env.appname }}"/' ./flutter/macos/Runner.xcodeproj/project.pbxproj
-          sed -i '' -e 's/PRODUCT_BUNDLE_IDENTIFIER = ".*"/PRODUCT_BUNDLE_IDENTIFIER = "com.smartia.remote"/' ./flutter/macos/Runner.xcodeproj/project.pbxproj
+          sed -i '' -e "s/PRODUCT_BUNDLE_IDENTIFIER = \".*\"/PRODUCT_BUNDLE_IDENTIFIER = \"$BUNDLE_ID\"/" ./flutter/macos/Runner.xcodeproj/project.pbxproj
           # Don't modify DEVELOPMENT_TEAM in project.pbxproj
 
           # Update CMake settings
@@ -570,10 +594,15 @@ jobs:
           APP_BUNDLE="${{ env.appname }}.app"
           [ -d "$APP_BUNDLE/Contents/MacOS" ] || { echo "Invalid macOS app bundle: $APP_BUNDLE"; exit 1; }
 
-          if [ -n "${{ secrets.MACOS_P12_BASE64 }}" ]; then
+          RELEASE_BUILD="${{ env.macos_release }}"
+          if [ "$RELEASE_BUILD" = "true" ] && { [ -z "${{ env.MACOS_P12_BASE64 }}" ] || [ -z "${{ env.MACOS_P12_PASSWORD }}" ]; }; then
+            echo "Release macOS builds require a Developer ID certificate and password." >&2
+            exit 1
+          fi
+          if [ -n "${{ env.MACOS_P12_BASE64 }}" ]; then
             echo "Developer signing secret detected; rcodesign will sign the complete bundle."
-            echo "${{ secrets.MACOS_P12_BASE64 }}" | base64 --decode > certificate.p12
-            rcodesign sign --p12-file certificate.p12 --p12-password "${{ secrets.MACOS_P12_PASSWORD }}" \
+            echo "${{ env.MACOS_P12_BASE64 }}" | base64 --decode > certificate.p12
+            rcodesign sign --p12-file certificate.p12 --p12-password "${{ env.MACOS_P12_PASSWORD }}" \
               --code-signature-flags runtime "$APP_BUNDLE"
             rm -f certificate.p12
             SIGNING_MODE="developer-id"
@@ -588,7 +617,9 @@ jobs:
           codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
           plutil -lint "$APP_BUNDLE/Contents/Info.plist"
           bundle_id=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_BUNDLE/Contents/Info.plist")
-          test "$bundle_id" = "com.smartia.remote"
+          expected_bundle_id='${{ env.macos_bundle_id }}'
+          if [ -z "$expected_bundle_id" ]; then expected_bundle_id='com.smartia.remote'; fi
+          test "$bundle_id" = "$expected_bundle_id"
           executable=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP_BUNDLE/Contents/Info.plist")
           test -x "$APP_BUNDLE/Contents/MacOS/$executable"
           "$APP_BUNDLE/Contents/MacOS/$executable" --version >/dev/null 2>&1
@@ -623,6 +654,24 @@ jobs:
             "${{ env.appname }}-${{ matrix.job.arch }}.dmg" \
             "${{ env.appname }}.app"
           mv "${{ env.appname }}-${{ matrix.job.arch }}.dmg" $GITHUB_WORKSPACE/
+
+      - name: Notarize release DMG
+        if: env.macos_release == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          for value in "$MACOS_NOTARY_KEY_ID" "$MACOS_NOTARY_ISSUER_ID" "$MACOS_NOTARY_PRIVATE_KEY_BASE64"; do
+            if [ -z "$value" ]; then
+              echo "Release macOS builds require Apple notarization credentials." >&2
+              exit 1
+            fi
+          done
+          KEY_PATH="$RUNNER_TEMP/AuthKey_${MACOS_NOTARY_KEY_ID}.p8"
+          echo "$MACOS_NOTARY_PRIVATE_KEY_BASE64" | base64 --decode > "$KEY_PATH"
+          xcrun notarytool submit "$GITHUB_WORKSPACE/${{ env.appname }}-${{ matrix.job.arch }}.dmg" \
+            --key "$KEY_PATH" --key-id "$MACOS_NOTARY_KEY_ID" --issuer "$MACOS_NOTARY_ISSUER_ID" --wait
+          xcrun stapler staple "$GITHUB_WORKSPACE/${{ env.appname }}-${{ matrix.job.arch }}.dmg"
+          rm -f "$KEY_PATH"
   
       - name: Rename rustdesk
         if: env.UPLOAD_ARTIFACT == 'true'
