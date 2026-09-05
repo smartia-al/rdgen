@@ -731,7 +731,7 @@ jobs:
           if-no-files-found: error
 
       - name: send file to rdgen server
-        if: ${{ env.rdgen == 'true' }}
+        if: ${{ env.rdgen == 'true' && env.operator_private != 'true' }}
         continue-on-error: true
         shell: bash
         run: |
@@ -744,7 +744,7 @@ jobs:
         
 
       - name: send file to api server
-        if: ${{ env.rdgen == 'false' }}
+        if: ${{ env.rdgen == 'false' && env.operator_private != 'true' }}
         continue-on-error: true
         shell: bash
         run: |
