@@ -93,6 +93,22 @@ jobs:
         with:
           zip_password: ${{ secrets.ZIP_PASSWORD }}
 
+      - name: Validate macOS release configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ env.macos_release }}" != "true" ]; then
+            echo "Non-release macOS build: Developer ID and notarization are not required."
+            exit 0
+          fi
+          for value in "$MACOS_P12_BASE64" "$MACOS_P12_PASSWORD" "$MACOS_NOTARY_KEY_ID" "$MACOS_NOTARY_ISSUER_ID" "$MACOS_NOTARY_PRIVATE_KEY_BASE64"; do
+            if [ -z "$value" ]; then
+              echo "Release macOS build is not configured for Developer ID signing and Apple notarization." >&2
+              exit 1
+            fi
+          done
+          echo "Release macOS signing and notarization configuration is present."
+
       - name: Finalize and Cleanup zip/json
         if: always() # Run even if previous steps fail
         continue-on-error: true
