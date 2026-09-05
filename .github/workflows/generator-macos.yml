@@ -49,7 +49,37 @@ jobs:
     with:
       zip_url_json: ${{ inputs.zip_url }}
 
+  release-preflight:
+    name: Validate macOS release configuration
+    needs: setup
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: encrypted-secrets-zip
+      - name: Load Secrets
+        uses: ./.github/actions/decrypt-secrets
+        with:
+          zip_password: ${{ secrets.ZIP_PASSWORD }}
+      - name: Validate release signing and notarization
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ env.macos_release }}" != "true" ]; then
+            echo "Non-release macOS build: Developer ID and notarization are not required."
+            exit 0
+          fi
+          for value in "$MACOS_P12_BASE64" "$MACOS_P12_PASSWORD" "$MACOS_NOTARY_KEY_ID" "$MACOS_NOTARY_ISSUER_ID" "$MACOS_NOTARY_PRIVATE_KEY_BASE64"; do
+            if [ -z "$value" ]; then
+              echo "Release macOS build is not configured for Developer ID signing and Apple notarization." >&2
+              exit 1
+            fi
+          done
+          echo "Release macOS signing and notarization configuration is present."
+
   generate-bridge:
+    needs: release-preflight
     uses: ./.github/workflows/bridge.yml
     with:
       version: ${{ inputs.version }}
@@ -57,7 +87,7 @@ jobs:
   build-for-macos:
     name: ${{ matrix.job.target }}
     runs-on: ${{ matrix.job.os }}
-    needs: [generate-bridge, setup]
+    needs: [generate-bridge, setup, release-preflight]
     strategy:
       fail-fast: false
       matrix:
@@ -92,22 +122,6 @@ jobs:
         uses: ./.github/actions/decrypt-secrets
         with:
           zip_password: ${{ secrets.ZIP_PASSWORD }}
-
-      - name: Validate macOS release configuration
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [ "${{ env.macos_release }}" != "true" ]; then
-            echo "Non-release macOS build: Developer ID and notarization are not required."
-            exit 0
-          fi
-          for value in "$MACOS_P12_BASE64" "$MACOS_P12_PASSWORD" "$MACOS_NOTARY_KEY_ID" "$MACOS_NOTARY_ISSUER_ID" "$MACOS_NOTARY_PRIVATE_KEY_BASE64"; do
-            if [ -z "$value" ]; then
-              echo "Release macOS build is not configured for Developer ID signing and Apple notarization." >&2
-              exit 1
-            fi
-          done
-          echo "Release macOS signing and notarization configuration is present."
 
       - name: Finalize and Cleanup zip/json
         if: always() # Run even if previous steps fail
