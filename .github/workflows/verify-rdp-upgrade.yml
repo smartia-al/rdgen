@@ -36,12 +36,14 @@ jobs:
             $installer=New-Object -ComObject WindowsInstaller.Installer
             $db=$installer.OpenDatabase((Resolve-Path $Path).Path,0)
             $view=$db.OpenView("SELECT ``Value`` FROM ``Property`` WHERE ``Property``='$Name'")
-            $view.Execute(); $record=$view.Fetch(); $value=$record.StringData(1); $view.Close(); return $value
+            [void]$view.Execute(); $record=$view.Fetch(); $value=[string]$record.StringData(1); [void]$view.Close(); return $value.Trim()
           }
           $files=@(Get-ChildItem candidate -Recurse -Filter '*.msi' -File)
           if ($files.Count -ne 1) { throw 'Expected exactly one candidate MSI.' }
           $candidate=$files[0].FullName
-          if ((Read-MsiProperty $candidate 'ProductName') -cne 'smartia.al_RD') { throw 'Stable internal MSI product identity differs.' }
+          $candidateName=Read-MsiProperty $candidate 'ProductName'
+          Write-Host ('Candidate MSI ProductName: ' + ($candidateName | ConvertTo-Json -Compress))
+          if ($candidateName -cne 'smartia.RDP') { throw 'Visible MSI package name differs.' }
           if ((Read-MsiProperty $candidate 'UpgradeCode') -ine (Read-MsiProperty previous.msi 'UpgradeCode')) { throw 'Rebrand creates a second MSI product family.' }
           foreach($path in @((Resolve-Path previous.msi).Path,$candidate)) {
             $log=Join-Path $env:TEMP ('rdp-upgrade-'+[guid]::NewGuid().ToString('N')+'.log')
