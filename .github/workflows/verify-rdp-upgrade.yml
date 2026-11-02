@@ -48,7 +48,7 @@ jobs:
             $p=Start-Process msiexec.exe -ArgumentList ('/i "{0}" /qn /norestart LAUNCH_TRAY_APP=N /L*V "{1}"' -f $path,$log) -Wait -PassThru
             if($p.ExitCode -notin @(0,3010)){throw "MSI upgrade failed: $($p.ExitCode)"}
           }
-          $apps=@(Get-ItemProperty 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*','HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue | Where-Object {$_.WindowsInstaller -eq 1 -and $_.DisplayName -in @('smartia.al_RD','smartia.al RD','smartia.RDP')})
+          $apps=@(Get-ItemProperty 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*','HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue | Where-Object {$_.WindowsInstaller -eq 1 -and $_.SystemComponent -ne 1 -and $_.DisplayName -in @('smartia.al_RD','smartia.al RD','smartia.RDP')})
           if($apps.Count -ne 1 -or $apps[0].DisplayName -cne 'smartia.RDP'){throw 'Upgrade left duplicate or stale installed-app records.'}
           $services=@(Get-CimInstance Win32_Service | Where-Object {$_.Name -in @('smartia-al-rd','smartia.al_RD','smartia.al RD')})
           if($services.Count -ne 1 -or $services[0].Name -ne 'smartia-al-rd'){throw 'Upgrade left duplicate SCM services.'}
