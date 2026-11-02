@@ -41,7 +41,7 @@ jobs:
           $files=@(Get-ChildItem candidate -Recurse -Filter '*.msi' -File)
           if ($files.Count -ne 1) { throw 'Expected exactly one candidate MSI.' }
           $candidate=$files[0].FullName
-          if ((Read-MsiProperty $candidate 'ProductName') -cne 'smartia.RDP') { throw 'Native product name differs.' }
+          if ((Read-MsiProperty $candidate 'ProductName') -cne 'smartia.al_RD') { throw 'Stable internal MSI product identity differs.' }
           if ((Read-MsiProperty $candidate 'UpgradeCode') -ine (Read-MsiProperty previous.msi 'UpgradeCode')) { throw 'Rebrand creates a second MSI product family.' }
           foreach($path in @((Resolve-Path previous.msi).Path,$candidate)) {
             $log=Join-Path $env:TEMP ('rdp-upgrade-'+[guid]::NewGuid().ToString('N')+'.log')
