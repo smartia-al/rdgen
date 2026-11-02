@@ -567,6 +567,14 @@ jobs:
             [xml]$package = Get-Content 'Package/Package.wxs' -Raw
             $package.Wix.Package.SetAttribute('Name', 'smartia.RDP')
             $package.Save((Join-Path $PWD 'Package/Package.wxs'))
+            # Smartia RDP: visible installed-app label
+            [xml]$regs = Get-Content 'Package/Components/Regs.wxs' -Raw
+            $regNs = New-Object System.Xml.XmlNamespaceManager($regs.NameTable)
+            $regNs.AddNamespace('w', 'http://wixtoolset.org/schemas/v4/wxs')
+            $labels = $regs.SelectNodes('//w:RegistryValue[@Name="DisplayName"]', $regNs)
+            if ($labels.Count -ne 1) { throw 'MSI visible app label anchor changed.' }
+            $labels[0].SetAttribute('Value', 'smartia.RDP')
+            $regs.Save((Join-Path $PWD 'Package/Components/Regs.wxs'))
             [xml]$component = Get-Content 'Package/Components/RustDesk.wxs' -Raw
             $ns = New-Object System.Xml.XmlNamespaceManager($component.NameTable)
             $ns.AddNamespace('w', 'http://wixtoolset.org/schemas/v4/wxs')
