@@ -556,9 +556,38 @@ jobs:
         if: env.UPLOAD_ARTIFACT == 'true'
         run: |
           $myappname = "${{ env.appname }}" -replace '\s','_'
+          # Smartia RDP: preserve MSI upgrade identity
+          if ("${{ env.appname }}" -eq 'smartia.RDP') { $myappname = 'smartia.al_RD' }
+          if ("${{ env.appname }}" -eq 'smartia.RDP') { Copy-Item 'rustdesk/rustdesk.exe' 'rustdesk/smartia-al-rd.exe' -Force }
           cp "rustdesk/rustdesk.exe" "rustdesk/${myappname}.exe" -ErrorAction SilentlyContinue
           pushd ./res/msi
           python preprocess.py --app-name "$myappname" --arp -d ../../rustdesk
+          if ("${{ env.appname }}" -eq 'smartia.RDP') {
+            # Keep Product/UpgradeCode/folder stable; change only the public label.
+            [xml]$package = Get-Content 'Package/Package.wxs' -Raw
+            $package.Wix.Package.SetAttribute('Name', 'smartia.RDP')
+            $package.Save((Join-Path $PWD 'Package/Package.wxs'))
+            [xml]$component = Get-Content 'Package/Components/RustDesk.wxs' -Raw
+            $ns = New-Object System.Xml.XmlNamespaceManager($component.NameTable)
+            $ns.AddNamespace('w', 'http://wixtoolset.org/schemas/v4/wxs')
+            $serviceAction = $component.SelectSingleNode('//w:CustomAction[@Id="CreateStartService.SetParam"]', $ns)
+            if (-not $serviceAction) { throw 'MSI service action is missing.' }
+            $serviceAction.SetAttribute('Value', 'smartia-al-rd;"[INSTALLFOLDER_INNER]smartia-al-rd.exe" --service')
+            foreach ($id in @('TryStopDeleteService.SetParam','SetPropertyIsServiceRunning.SetParam.AppName')) {
+              $node = $component.SelectSingleNode('//w:CustomAction[@Id="' + $id + '"]', $ns)
+              if (-not $node) { throw 'MSI service identity action is missing.' }
+              $node.SetAttribute('Value', 'smartia-al-rd')
+            }
+            $tray = $component.SelectSingleNode('//w:InstallExecuteSequence/w:Custom[@Action="LaunchAppTray"]', $ns)
+            if (-not $tray) { throw 'MSI tray launch action is missing.' }
+            $tray.SetAttribute('Condition', '0')
+            $component.Save((Join-Path $PWD 'Package/Components/RustDesk.wxs'))
+            $actions = 'CustomActions/CustomActions.cpp'
+            $cpp = Get-Content $actions -Raw
+            if (-not $cpp.Contains('L"%ls Service", svcName')) { throw 'MSI service label anchor changed.' }
+            $cpp = $cpp.Replace('L"%ls Service", svcName', 'L"smartia.RDP Service"')
+            [IO.File]::WriteAllText((Join-Path $PWD $actions), $cpp)
+          }
           nuget restore msi.sln
           msbuild msi.sln -p:Configuration=Release -p:Platform=x64 /p:TargetVersion=Windows10
           cp ./Package/bin/x64/Release/en-us/Package.msi ../../SignOutput/rustdesk-latest.msi
@@ -617,11 +646,13 @@ jobs:
           # create the normal Windows registration and provide shortcuts.
           $publicName = "${{ env.appname }}"
           $msiProductName = $publicName -replace '\s', '_'
+          if ($publicName -eq 'smartia.RDP') { $msiProductName = 'smartia.al_RD' }
           # The MSI's own custom action creates the product service with the
           # MSI product identity.  Do not run --install-service afterwards:
           # the executable's display name can contain spaces and would create
           # a second, differently named service outside the MSI installation.
           $serviceName = $msiProductName
+          if ($publicName -eq 'smartia.RDP') { $serviceName = 'smartia-al-rd' }
           if ([string]::IsNullOrWhiteSpace($serviceName) -or $serviceName -notmatch '^[A-Za-z0-9_.-]+$') { throw "Custom Windows service identity is invalid." }
           $msiLog = Join-Path $env:TEMP 'smartia-rdgen-msi-install.log'
           $install = Start-Process -FilePath "$env:SystemRoot\System32\msiexec.exe" -ArgumentList ('/i "{0}" /qn /norestart /L*V "{1}"' -f $msi, $msiLog) -Wait -PassThru -WindowStyle Hidden
@@ -649,7 +680,13 @@ jobs:
           Write-Host "MSI install directory: $installDir"
           Write-Host "MSI client executable: $installedExe"
           Write-Host "Windows service executable: $($service.PathName)"
-          if ($service.PathName -notmatch [regex]::Escape($installedExe)) { throw "Custom service does not use the MSI-installed executable." }
+          $serviceExe = $installedExe
+          if ($publicName -eq 'smartia.RDP') {
+            $serviceExe = Join-Path $installDir 'smartia-al-rd.exe'
+            if (-not (Test-Path $serviceExe)) { throw 'Canonical service executable is missing.' }
+            if ((Get-FileHash $serviceExe).Hash -ne (Get-FileHash $installedExe).Hash) { throw 'MSI launchers differ.' }
+          }
+          if ($service.PathName -notmatch [regex]::Escape($serviceExe)) { throw "Custom service does not use the MSI-installed executable." }
           if ($service.StartMode -notin @('Auto', 'Automatic')) { throw "Custom service is not configured for automatic startup." }
           if ($service.State -ne 'Running') { Start-Service -Name $serviceName -ErrorAction Stop; Start-Sleep -Seconds 2 }
           $service = Get-CimInstance Win32_Service -Filter "Name='$escapedService'" -ErrorAction Stop
