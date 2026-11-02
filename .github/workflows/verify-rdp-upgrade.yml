@@ -1,0 +1,62 @@
+name: Verify smartia.RDP upgrade identity
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Successful Windows candidate generator run
+        required: true
+        type: string
+permissions:
+  actions: read
+  contents: read
+jobs:
+  upgrade:
+    runs-on: windows-2022
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CANDIDATE_RUN: ${{ inputs.run_id }}
+    steps:
+      - name: Download verified candidate and previous MSI
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          if ($env:CANDIDATE_RUN -notmatch '^\d+$') { throw 'Invalid candidate run.' }
+          $run = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:CANDIDATE_RUN" | ConvertFrom-Json
+          if ($run.path -ne '.github/workflows/generator-windows.yml' -or $run.conclusion -ne 'success' -or $run.head_branch -ne 'master') { throw 'Candidate is not a successful trusted Windows generator run.' }
+          gh run download $env:CANDIDATE_RUN --repo $env:GITHUB_REPOSITORY --pattern 'smartia-final-*-windows-x64' --dir candidate
+          if ($LASTEXITCODE) { throw 'Candidate download failed.' }
+          Invoke-WebRequest 'https://remote.smartia.al/downloads/smartia-al-rd-windows-x64.msi' -OutFile previous.msi
+          if ((Get-FileHash previous.msi).Hash -ine '43b04616d28334c5006323e89b15fe7b8ac9f1005eea489f820a289e7f5e0b81') { throw 'Previous verified MSI hash changed; review baseline explicitly.' }
+      - name: Verify one MSI product and one canonical service after upgrade
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          function Read-MsiProperty($Path,$Name) {
+            $installer=New-Object -ComObject WindowsInstaller.Installer
+            $db=$installer.OpenDatabase((Resolve-Path $Path).Path,0)
+            $view=$db.OpenView("SELECT ``Value`` FROM ``Property`` WHERE ``Property``='$Name'")
+            $view.Execute(); $record=$view.Fetch(); $value=$record.StringData(1); $view.Close(); return $value
+          }
+          $files=@(Get-ChildItem candidate -Recurse -Filter '*.msi' -File)
+          if ($files.Count -ne 1) { throw 'Expected exactly one candidate MSI.' }
+          $candidate=$files[0].FullName
+          if ((Read-MsiProperty $candidate 'ProductName') -cne 'smartia.RDP') { throw 'Native product name differs.' }
+          if ((Read-MsiProperty $candidate 'UpgradeCode') -ine (Read-MsiProperty previous.msi 'UpgradeCode')) { throw 'Rebrand creates a second MSI product family.' }
+          foreach($path in @((Resolve-Path previous.msi).Path,$candidate)) {
+            $log=Join-Path $env:TEMP ('rdp-upgrade-'+[guid]::NewGuid().ToString('N')+'.log')
+            $p=Start-Process msiexec.exe -ArgumentList ('/i "{0}" /qn /norestart LAUNCH_TRAY_APP=N /L*V "{1}"' -f $path,$log) -Wait -PassThru
+            if($p.ExitCode -notin @(0,3010)){throw "MSI upgrade failed: $($p.ExitCode)"}
+          }
+          $apps=@(Get-ItemProperty 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*','HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue | Where-Object {$_.WindowsInstaller -eq 1 -and $_.DisplayName -in @('smartia.al_RD','smartia.al RD','smartia.RDP')})
+          if($apps.Count -ne 1 -or $apps[0].DisplayName -cne 'smartia.RDP'){throw 'Upgrade left duplicate or stale installed-app records.'}
+          $services=@(Get-CimInstance Win32_Service | Where-Object {$_.Name -in @('smartia-al-rd','smartia.al_RD','smartia.al RD')})
+          if($services.Count -ne 1 -or $services[0].Name -ne 'smartia-al-rd'){throw 'Upgrade left duplicate SCM services.'}
+          if($services[0].DisplayName -cne 'smartia.RDP Service'){throw 'Native service branding differs.'}
+          $folder=$apps[0].InstallLocation.TrimEnd('\')
+          $canonical=Join-Path $folder 'smartia-al-rd.exe'
+          $msiExe=Join-Path $folder 'smartia.al_RD.exe'
+          if((Get-FileHash $canonical).Hash -ne (Get-FileHash $msiExe).Hash){throw 'Launchers differ after upgrade.'}
+          if((Get-Item $canonical).VersionInfo.FileDescription -cne 'smartia.RDP'){throw 'Native process description differs.'}
+          if($services[0].PathName -notmatch [regex]::Escape($canonical)){throw 'SCM does not use canonical executable.'}
+          Write-Host 'Upgrade preserved MSI family; one smartia.RDP app and one canonical service.'
