@@ -585,8 +585,25 @@ jobs:
             $regNs = New-Object System.Xml.XmlNamespaceManager($regs.NameTable)
             $regNs.AddNamespace('w', 'http://wixtoolset.org/schemas/v4/wxs')
             $labels = $regs.SelectNodes('//w:RegistryValue[@Name="DisplayName"]', $regNs)
-            if ($labels.Count -ne 1) { throw 'MSI visible app label anchor changed.' }
-            $labels[0].SetAttribute('Value', 'smartia.RDP')
+            if ($labels.Count -eq 1) {
+              # Legacy RustDesk duplicates native MSI ARP with a compatibility key.
+              $labels[0].SetAttribute('Value', 'smartia.RDP')
+              $hidden = $regs.CreateElement('RegistryValue', $regs.DocumentElement.NamespaceURI)
+              $hidden.SetAttribute('Type', 'integer')
+              $hidden.SetAttribute('Name', 'SystemComponent')
+              $hidden.SetAttribute('Value', '1')
+              [void]$labels[0].ParentNode.AppendChild($hidden)
+            } elseif ($labels.Count -eq 0) {
+              # RustDesk 1.5.1 moved private install state outside Uninstall and
+              # removes its own legacy compatibility registration during upgrade.
+              $state = $regs.SelectSingleNode('//w:Component[@Id="Product.Registry.InstallState"]/w:RegistryKey', $regNs)
+              $legacy = $regs.SelectNodes('//w:Component[starts-with(@Id,"Product.Registry.RemoveLegacyUninstall")]', $regNs)
+              if (-not $state -or $legacy.Count -ne 2) { throw 'Unknown MSI install-state layout.' }
+              $state.SetAttribute('Key', 'Software\smartia-al-rd\InstallState\smartia-al-rd')
+              $search = $regs.SelectSingleNode('//w:RegistrySearch[@Id="CurrentShareRdpSearch"]', $regNs)
+              if (-not $search) { throw 'MSI current install-state search missing.' }
+              $search.SetAttribute('Key', 'Software\smartia-al-rd\InstallState\smartia-al-rd')
+            } else { throw 'Ambiguous MSI visible app label.' }
             $regs.Save((Join-Path $PWD 'Package/Components/Regs.wxs'))
             [xml]$component = Get-Content 'Package/Components/RustDesk.wxs' -Raw
             $ns = New-Object System.Xml.XmlNamespaceManager($component.NameTable)
