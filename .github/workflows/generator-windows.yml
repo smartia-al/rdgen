@@ -294,6 +294,19 @@ jobs:
         with:
           prefix-key: ${{ matrix.job.os }}
 
+      - name: Select vcpkg baseline from RustDesk release manifest
+        shell: python
+        run: |
+          import json, os, re
+          from pathlib import Path
+          manifest = json.loads(Path("vcpkg.json").read_text())
+          baseline = manifest.get("vcpkg-configuration", {}).get("default-registry", {}).get("baseline", "")
+          if not isinstance(baseline, str) or not re.fullmatch(r"[0-9a-f]{40}", baseline):
+              raise ValueError("RustDesk manifest must pin an exact vcpkg baseline")
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as output:
+              output.write(f"VCPKG_COMMIT_ID={baseline}\n")
+          print(f"Using RustDesk manifest vcpkg revision {baseline}")
+
       - name: Setup vcpkg with Github Actions binary cache
         uses: lukka/run-vcpkg@v11
         with:
