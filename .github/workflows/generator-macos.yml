@@ -335,6 +335,13 @@ jobs:
           subprocess.run(['rustfmt', '--edition', '2021', '--emit', 'stdout', str(common)], stdout=subprocess.DEVNULL, check=True)
           page = Path('flutter/lib/desktop/pages/desktop_home_page.dart')
           page.write_text(page.read_text(encoding='utf-8').replace('updateUrl.isNotEmpty', 'false'), encoding='utf-8')
+          common_dart = Path('flutter/lib/common.dart')
+          dart = common_dart.read_text(encoding='utf-8')
+          title = 'String getWindowName({WindowType? overrideType}) {\n  final name = bind.mainGetAppNameSync();'
+          if dart.count(title) != 1:
+              raise ValueError('Window title presentation boundary changed')
+          branded = 'String getWindowName({WindowType? overrideType}) {\n  final nativeName = bind.mainGetAppNameSync();\n  final name = ["smartia-al-rd", "smartia.al_RD", "smartia.al RD"].contains(nativeName) ? "smartia.RDP" : nativeName;'
+          common_dart.write_text(dart.replace(title, branded, 1), encoding='utf-8')
 
       - uses: Swatinem/rust-cache@v2
         with:

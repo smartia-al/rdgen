@@ -33,8 +33,11 @@ class UpdateGuardTest(unittest.TestCase):
                         os.chdir(temp)
                         Path('src').mkdir()
                         Path('src/common.rs').write_text(source)
+                        Path('flutter/lib').mkdir(parents=True)
+                        title = 'String getWindowName({WindowType? overrideType}) {\n  final name = bind.mainGetAppNameSync();\n}\nString get appName => bind.mainGetAppNameSync();'
+                        Path('flutter/lib/common.dart').write_text(title)
                         page = Path('flutter/lib/desktop/pages/desktop_home_page.dart')
-                        page.parent.mkdir(parents=True)
+                        page.parent.mkdir(parents=True, exist_ok=True)
                         page.write_text('updateUrl.isNotEmpty')
                         with patch('subprocess.run') as parser:
                             if source.count('pub fn check_software_update() {') != 1:
@@ -46,6 +49,8 @@ class UpdateGuardTest(unittest.TestCase):
                                 exec(compile(step['run'], '<workflow>', 'exec'), {})
                                 self.assertEqual(Path('src/common.rs').read_text().replace(GUARD, '', 1), source)
                                 self.assertEqual(page.read_text(), 'false')
+                                self.assertIn('String get appName => bind.mainGetAppNameSync();', Path('flutter/lib/common.dart').read_text())
+                                self.assertIn('smartia.RDP', Path('flutter/lib/common.dart').read_text())
                                 parser.assert_called_once()
                     finally:
                         os.chdir(original_dir)
