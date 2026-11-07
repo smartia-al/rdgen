@@ -57,6 +57,17 @@ jobs:
             Select-Object PSChildName,DisplayName,WindowsInstaller,SystemComponent,InstallLocation,DisplayVersion |
             ConvertTo-Json -Depth 3 | Write-Host
           if($apps.Count -ne 1 -or $apps[0].DisplayName -cne 'smartia.RDP'){throw 'Upgrade left duplicate or stale installed-app records.'}
+          $candidateCode=Read-MsiProperty $candidate 'ProductCode'
+          if($apps[0].PSChildName -ine $candidateCode){throw 'Visible ARP entry is not the candidate native MSI product.'}
+          $previousCode=Read-MsiProperty previous.msi 'ProductCode'
+          $installer=New-Object -ComObject WindowsInstaller.Installer
+          if($previousCode -ine $candidateCode -and $installer.ProductState($previousCode) -eq 5){throw 'Previous native MSI product is still installed.'}
+          $nativeState=Get-ItemProperty 'HKLM:\Software\smartia-al-rd\InstallState\smartia-al-rd' -ErrorAction SilentlyContinue
+          if ((Read-MsiProperty $candidate 'ProductVersion') -match '^1\.5\.') {
+            if (-not $nativeState -or $nativeState.MsiProductCode -ine $candidateCode -or $nativeState.InstallLocation.TrimEnd('\') -ine $apps[0].InstallLocation.TrimEnd('\')) {
+              throw 'Native RustDesk install-state does not match candidate MSI ownership.'
+            }
+          }
           $services=@(Get-CimInstance Win32_Service | Where-Object {$_.Name -in @('smartia-al-rd','smartia.al_RD','smartia.al RD')})
           if($services.Count -ne 1 -or $services[0].Name -ne 'smartia-al-rd'){throw 'Upgrade left duplicate SCM services.'}
           if($services[0].DisplayName -cne 'smartia.RDP Service'){throw 'Native service branding differs.'}
