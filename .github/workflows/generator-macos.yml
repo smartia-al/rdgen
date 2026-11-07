@@ -319,6 +319,23 @@ jobs:
             targets: ${{ matrix.job.target }}
             components: "rustfmt"
   
+      - name: Guard custom-client upstream update checks
+        if: env.removeNewVersionNotif == 'true'
+        shell: python
+        run: |
+          import subprocess
+          from pathlib import Path
+          common = Path('src/common.rs')
+          source = common.read_text(encoding='utf-8')
+          anchor = 'pub fn check_software_update() {'
+          if source.count(anchor) != 1:
+              raise ValueError('Upstream update entrypoint changed; refusing unsafe source patch')
+          source = source.replace(anchor, anchor + '\n    // Custom releases are managed by the Smartia agent.\n    if !is_rustdesk() { return; }', 1)
+          common.write_text(source, encoding='utf-8')
+          subprocess.run(['rustfmt', '--edition', '2021', '--emit', 'stdout', str(common)], stdout=subprocess.DEVNULL, check=True)
+          page = Path('flutter/lib/desktop/pages/desktop_home_page.dart')
+          page.write_text(page.read_text(encoding='utf-8').replace('updateUrl.isNotEmpty', 'false'), encoding='utf-8')
+
       - uses: Swatinem/rust-cache@v2
         with:
           prefix-key: ${{ matrix.job.os }}
@@ -496,13 +513,6 @@ jobs:
         run: |
           wget https://raw.githubusercontent.com/bryangerlach/rdgen/refs/heads/master/.github/patches/hidecm.diff
           git apply hidecm.diff
-
-      - name: removeNewVersionNotif
-        continue-on-error: true
-        if: env.removeNewVersionNotif == 'true'
-        run: | 
-          sed -i -e 's|updateUrl.isNotEmpty|false|' ./flutter/lib/desktop/pages/desktop_home_page.dart
-          sed -i '/let (request, url) =/,/Ok(())/{/Ok(())/!d}' ./src/common.rs
 
       - name: Restore bridge files
         uses: actions/download-artifact@master
