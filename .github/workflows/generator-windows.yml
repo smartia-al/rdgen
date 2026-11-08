@@ -380,8 +380,15 @@ jobs:
             Start-Sleep -Seconds (3 * $attempt)
           }
           if (-not $downloaded) {
+            if ($env:branding_sha256) { throw 'Pinned native icon unavailable; refusing upstream fallback.' }
             Write-Warning 'Custom icon is temporarily unavailable; retaining RustDesk upstream icons for this build.'
             exit 0
+          }
+          # Smartia native icon SHA gate
+          if ($env:branding_sha256) {
+            if ($env:branding_sha256 -notmatch '^[a-f0-9]{64}$' -or (Get-FileHash -LiteralPath $downloadPath -Algorithm SHA256).Hash.ToLowerInvariant() -ne $env:branding_sha256) {
+              throw 'Downloaded native icon does not match the selected SaaS revision.'
+            }
           }
           Move-Item ./res/icon.ico ./res/icon.ico.bak -Force
           Move-Item ./res/icon.png ./res/icon.png.bak -Force

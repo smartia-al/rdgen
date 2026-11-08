@@ -375,12 +375,13 @@ jobs:
           mkdir -p ./macos/Runner/Assets.xcassets/AppIcon.appiconset
           mkdir -p ./rustdesk/data/flutter_assets/assets
 
-          # Download icon using curl with additional SSL options
-          curl -k -L --tlsv1.2 --proto =https --ssl-reqd \
-            -H "User-Agent: Mozilla/5.0" \
-            "${{ env.iconlink_url }}/get_png?filename=${{ env.iconlink_file }}&uuid=${{ env.iconlink_uuid }}" \
-            -o ./res/icon.png || wget --no-check-certificate -O ./res/icon.png "${{ env.iconlink_url }}/get_png?filename=${{ env.iconlink_file }}&uuid=${{ env.iconlink_uuid }}"
-            
+          # Smartia native icon SHA gate
+          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 --retry 3 \
+            "${{ env.iconlink_url }}/get_png?filename=${{ env.iconlink_file }}&uuid=${{ env.iconlink_uuid }}" -o ./res/icon.png
+          if [ -n "${branding_sha256:-}" ]; then
+            printf '%s  %s\n' "$branding_sha256" './res/icon.png' | shasum -a 256 -c -
+          fi
+
           # Backup existing files (if they exist)
           [ -f "./res/32x32.png" ] && mv ./res/32x32.png ./res/32x32.png.bak
           [ -f "./res/64x64.png" ] && mv ./res/64x64.png ./res/64x64.png.bak
