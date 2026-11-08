@@ -291,7 +291,7 @@ jobs:
           from pathlib import Path
           path = Path('flutter/macos/Runner/Base.lproj/MainMenu.xib')
           tree = ET.parse(path)
-          windows = tree.getroot().findall(".//window[@title='RustDesk']")
+          windows = tree.getroot().findall(".//window[@customClass='MainFlutterWindow']")
           if len(windows) != 1:
               raise ValueError('Expected exactly one upstream main-window title')
           windows[0].set('title', os.environ['SMARTIA_PRODUCT_DISPLAY_NAME'])

@@ -25,6 +25,6 @@ class MacTitleTest(unittest.TestCase):
         window=tree.find('window');self.assertEqual(window.attrib,{'title':'smartia.RDP','id':'main','customClass':'MainFlutterWindow','customModule':'RustDesk'})
         self.assertEqual(tree.find('object').get('bundle'),'al.smartia.support')
     def test_unknown_upstream_structure_is_rejected(self):
-        for xml in ['<document/>','<document><window title="RustDesk"/><window title="RustDesk"/></document>']:
+        for xml in ['<document/>','<document><window title="RustDesk" customClass="MainFlutterWindow"/><window title="RustDesk" customClass="MainFlutterWindow"/></document>']:
             with self.assertRaises(ValueError):self.run_step(xml)
 if __name__=='__main__':unittest.main()
