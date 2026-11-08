@@ -281,6 +281,22 @@ jobs:
               brew install pkg-config
           fi
 
+      - name: Apply macOS product window title
+        shell: python
+        env:
+          SMARTIA_PRODUCT_DISPLAY_NAME: ${{ env.appname }}
+        run: |
+          import os
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+          path = Path('flutter/macos/Runner/Base.lproj/MainMenu.xib')
+          tree = ET.parse(path)
+          windows = tree.getroot().findall(".//window[@title='RustDesk']")
+          if len(windows) != 1:
+              raise ValueError('Expected exactly one upstream main-window title')
+          windows[0].set('title', os.environ['SMARTIA_PRODUCT_DISPLAY_NAME'])
+          tree.write(path, encoding='utf-8', xml_declaration=True)
+
       - name: Install NASM
         run: |
           # Install NASM 2.16.x from official release.
@@ -340,7 +356,7 @@ jobs:
           title = 'String getWindowName({WindowType? overrideType}) {\n  final name = bind.mainGetAppNameSync();'
           if dart.count(title) != 1:
               raise ValueError('Window title presentation boundary changed')
-          branded = 'String getWindowName({WindowType? overrideType}) {\n  final nativeName = bind.mainGetAppNameSync();\n  final name = ["smartia-al-rd", "smartia.al_RD", "smartia.al RD"].contains(nativeName) ? "smartia.RDP" : nativeName;'
+          branded = 'String getWindowName({WindowType? overrideType}) {\n  final nativeName = bind.mainGetAppNameSync();\n  final name = ["RustDesk", "smartia-al-rd", "smartia.al_RD", "smartia.al RD"].contains(nativeName) ? "smartia.RDP" : nativeName;'
           common_dart.write_text(dart.replace(title, branded, 1), encoding='utf-8')
 
       - uses: Swatinem/rust-cache@v2
