@@ -13,6 +13,14 @@ STEP = next(step for job in WORKFLOW['jobs'].values() for step in job.get('steps
 
 
 class BaselineTest(unittest.TestCase):
+    def test_macos_uses_same_release_manifest_step(self):
+        workflow = yaml.safe_load((ROOT / '.github/workflows/generator-macos.yml').read_text())
+        steps = workflow['jobs']['build-for-macos']['steps']
+        selected = next(i for i, step in enumerate(steps) if step.get('name') == STEP['name'])
+        setup = next(i for i, step in enumerate(steps) if step.get('name') == 'Setup vcpkg with Github Actions binary cache')
+        self.assertLess(selected, setup)
+        self.assertEqual(steps[selected]['run'], STEP['run'])
+
     def run_step(self, baseline):
         old_dir = Path.cwd()
         old_env = os.environ.get('GITHUB_ENV')
